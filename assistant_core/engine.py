@@ -18,7 +18,9 @@ class AssistantEngine:
         self._llm = llm
         self._host = host
         # In-memory only: appropriate for unit tests, not production multi-worker use.
-        self._pending: dict[str, tuple[ToolDefinition, dict[str, Any], dict[str, Any]]] = {}
+        self._pending: dict[
+            str, tuple[ToolDefinition, dict[str, Any], dict[str, Any], str]
+        ] = {}
 
     def handle(
         self,
@@ -75,7 +77,9 @@ class AssistantEngine:
         args = dict(result.tool_call.arguments)
         if tool.requires_confirmation:
             confirmation_id = secrets.token_urlsafe(24)
-            self._pending[confirmation_id] = (tool, args, dict(context))
+            self._pending[confirmation_id] = (
+                tool, args, dict(context), conversation_id
+            )
             return {
                 **base,
                 "type": "confirmation_required",
@@ -113,10 +117,16 @@ class AssistantEngine:
             "request_id": request_id,
             "conversation_id": conversation_id,
         }
-        pending = self._pending.pop(confirmation_id, None)
+        pending = self._pending.get(confirmation_id)
         if pending is None:
             return self._error(request_id, conversation_id, "CONFIRMATION_NOT_FOUND",
                                "This confirmation is invalid, expired, or already used")
+        tool, args, context, original_conversation_id = pending
+        if conversation_id != original_conversation_id:
+            return self._error(request_id, conversation_id, "CONFIRMATION_CONTEXT_MISMATCH",
+                               "This confirmation belongs to a different conversation")
+        # Consume only after validating the original conversation.
+        self._pending.pop(confirmation_id, None)
         if not approved:
             return {
                 **base,
@@ -124,7 +134,6 @@ class AssistantEngine:
                 "message": {"role": "assistant", "content": "Action cancelled."},
             }
 
-        tool, args, context = pending
         try:
             data = tool.handler(args, context)
         except Exception:
