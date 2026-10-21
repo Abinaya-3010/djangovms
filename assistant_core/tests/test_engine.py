@@ -115,6 +115,19 @@ class AssistantEngineTests(unittest.TestCase):
         self.assertEqual(replay["error"]["code"], "CONFIRMATION_NOT_FOUND")
         self.assertEqual(len(self.calls), 1)
 
+    def test_confirmation_cannot_be_used_from_another_conversation(self):
+        engine = AssistantEngine(
+            MockLLM(LLMResult(tool_call=ToolCall("create_rfq", {"title": "Bound context"}))),
+            MockHost([self.write_tool]),
+        )
+        pending = engine.handle(request_id="r11", conversation_id="original", message="create")
+        response = engine.confirm(
+            request_id="r12", conversation_id="different",
+            confirmation_id=pending["confirmation_id"], approved=True,
+        )
+        self.assertEqual(response["error"]["code"], "CONFIRMATION_CONTEXT_MISMATCH")
+        self.assertEqual(self.calls, [])
+
     def test_rejected_confirmation_does_not_write(self):
         engine = AssistantEngine(
             MockLLM(LLMResult(tool_call=ToolCall("create_rfq", {"title": "Cancelled"}))),
